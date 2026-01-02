@@ -1,114 +1,99 @@
-# Keuangan UMKM (Google Apps Script Web App)
+# Cara Install (Ringkas)
 
-Aplikasi web berbasis **Google Apps Script + Google Spreadsheet** untuk mencatat **pemasukan & pengeluaran** UMKM (contoh: **Bengkel** dan **Cucian**) lengkap dengan **dashboard**, **riwayat transaksi**, **log aktivitas**, **manage akun**, serta **export laporan PDF & Excel (XLSX)**.
-
----
-
-## Daftar Isi
-- [Fitur](#fitur)
-- [Teknologi](#teknologi)
-- [Arsitektur Singkat](#arsitektur-singkat)
-- [Struktur Database Spreadsheet](#struktur-database-spreadsheet)
-- [Instalasi dari Nol](#instalasi-dari-nol)
-- [Konfigurasi](#konfigurasi)
-- [Enable Drive API (WAJIB untuk Export)](#enable-drive-api-wajib-untuk-export)
-- [Setup Awal](#setup-awal)
-- [Deploy Web App](#deploy-web-app)
-- [Cara Pakai](#cara-pakai)
-- [Export Laporan (PDF/XLSX)](#export-laporan-pdfxlsx)
-- [Admin / Manage Akun](#admin--manage-akun)
-- [Troubleshooting](#troubleshooting)
-- [FAQ](#faq)
-- [Catatan Keamanan](#catatan-keamanan)
-- [Lisensi](#lisensi)
+Panduan ini untuk menjalankan **Keuangan UMKM** sebagai **Google Apps Script Web App** dengan database di **Google Spreadsheet**.
 
 ---
 
-## Fitur
-### 1) Login + Session
-- Login pakai **email + password**
-- Setelah login, sistem membuat **sessionId** dan disimpan di browser (**localStorage**)
-- Saat halaman dibuka, sistem menjalankan **validasi session** (auto login jika session valid)
-- Logout menghapus sessionId
-
-### 2) Dashboard
-Menampilkan ringkasan:
-- Total pemasukan
-- Total pengeluaran
-- Laba dan rugi
-- Saldo awal dan saldo akhir
-- Jumlah transaksi
-
-Filter:
-- Tanggal (start–end)
-- UMKM: Bengkel / Cucian / Semua
-
-Aksi:
-- Print PDF
-- Export Excel (XLSX)
-
-### 3) Input Transaksi
-Input transaksi untuk Bengkel/Cucian:
-- Tanggal
-- Tipe: Pemasukan / Pengeluaran
-- Metode pembayaran: Cash / Transfer
-- Nominal (format rupiah)
-- Keterangan (opsional)
-- Setelah sukses simpan, field otomatis **kosong lagi**
-
-### 4) Riwayat Transaksi
-- Default memuat transaksi saat halaman dibuka
-- Paging (Prev/Next)
-- Filter tanggal + UMKM
-- Aksi per transaksi:
-  - Detail (modal)
-  - Edit (modal)
-  - Hapus (soft delete)
-
-### 5) Activity Log
-- Mencatat aksi penting:
-  - Login / validasi
-  - Tambah/edit/hapus transaksi
-  - Export laporan
-  - Request API (API_..._OK / API_..._ERR)
-- Halaman log dengan paging
-
-### 6) Manage Akun (Admin)
-- Halaman admin pakai **Admin Key**
-- Setelah key valid:
-  - List akun
-  - Tambah akun
-  - Edit akun
-  - Hapus akun (soft delete / nonaktif)
-- Semua aksi admin masuk log
-
-### 7) Database Spreadsheet
-Sheet utama:
-- USERS
-- TRANSACTIONS
-- TX_BENGKEL
-- TX_CUCIAN
-- ACTIVITY_LOG
-- SETTINGS
-
-### 8) Export Laporan
-- Output: PDF & XLSX
-- Disimpan ke folder Drive “Keuangan UMKM - Laporan” (bisa pakai folder custom)
-- Dari web: tombol export akan membuka **downloadUrl** (atau minimal fileUrl)
+## 1) Siapkan Spreadsheet DB
+1. Buat folder di Google Drive (bebas).
+2. Buat **Google Spreadsheet** baru di folder tersebut (misal: `Keuangan UMKM - DB`).
+3. Buka spreadsheet → **Extensions → Apps Script**.
 
 ---
 
-## Teknologi
-- Google Apps Script (V8 runtime)
-- Google Spreadsheet (sebagai database)
-- HTML/CSS/JS (front-end via HtmlService)
-- Drive API + UrlFetchApp (export PDF/XLSX)
+## 2) Buat Sheet Database
+Di spreadsheet DB, buat sheet dengan nama persis berikut:
+- `USERS`
+- `TRANSACTIONS`
+- `TX_BENGKEL`
+- `TX_CUCIAN`
+- `ACTIVITY_LOG`
+- `SETTINGS`
+
+Isi header baris pertama (row 1) sesuai ini:
+
+### USERS
+`userId | email | name | passwordHash | isActive | createdAt | updatedAt | isDeleted`
+
+### TRANSACTIONS, TX_BENGKEL, TX_CUCIAN
+`TX_ID | DATE | UMKM | TYPE | PAYMENT_METHOD | AMOUNT | NOTE | CREATED_AT | UPDATED_AT | IS_DELETED`
+
+### ACTIVITY_LOG
+`TIME | ACTION | EMAIL | DETAIL`
+
+### SETTINGS
+`KEY | VALUE`
 
 ---
 
-## Arsitektur Singkat
-**Frontend (HTML/JS)** memanggil fungsi Apps Script lewat:
-```js
-google.script.run.api_listTx(sessionId, filters)
-google.script.run.api_addTx(sessionId, payload)
-google.script.run.api_exportReport(sessionId, filters)
+## 3) Copy File Kode ke Apps Script
+Di Apps Script editor, buat/copy file-file project:
+- Semua file `.gs`
+- Semua file `.html`
+- `appsscript.json`
+
+> Pastikan nama file & isi kodenya sesuai project kamu.
+
+---
+
+## 4) Aktifkan Drive API (Wajib untuk Export PDF/XLSX)
+
+### A. Advanced Google Services (Apps Script)
+Apps Script → **Services (+)** → tambah:
+- **Drive API**
+
+### B. Google Cloud Console
+Apps Script → **Project Settings** → lihat **Google Cloud Platform (GCP) project**
+Lalu di Google Cloud Console:
+- APIs & Services → Library → enable:
+  - **Google Drive API**
+
+---
+
+## 5) Set Folder Export Laporan (Opsional tapi disarankan)
+Kalau kamu ingin pakai folder khusus export, isi di sheet `SETTINGS`:
+
+- KEY: `REPORT_FOLDER_ID`
+- VALUE: `1QGB9-quFnMyijO576R56ar5pDr2waeRm`
+
+Folder ini dari link:
+`https://drive.google.com/drive/folders/1QGB9-quFnMyijO576R56ar5pDr2waeRm`
+
+---
+
+## 6) Jalankan Setup Awal (Jika Ada)
+Di Apps Script editor, jalankan fungsi setup (contoh: `runSetup()`), lalu **Authorize** saat diminta.
+
+> Jalankan hanya jika memang project kamu butuh setup.  
+> Kalau `runSetup()` membuat template/clear sheet, jalankan di DB kosong.
+
+---
+
+## 7) Deploy Web App
+1. Apps Script → **Deploy → New deployment**
+2. Select type: **Web app**
+3. Execute as: **User deploying**
+4. Who has access: **Anyone**
+5. Klik **Deploy**
+6. Copy **Web app URL**
+
+Jika update kode:
+- Deploy → **Manage deployments** → Edit → **New version** → Deploy
+
+---
+
+## 8) Login
+- Buka URL Web App
+- Login pakai akun yang ada di sheet `USERS`
+
+---

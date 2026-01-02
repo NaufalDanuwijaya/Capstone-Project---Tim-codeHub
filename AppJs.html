@@ -1,0 +1,1089 @@
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+
+  const state = {
+    sessionId: null,
+    user: null,
+    route: 'dashboard',
+    sidebarOpen: false,
+
+    dashStart: '',
+    dashEnd: '',
+    dashUmkm: 'ALL',
+
+    histStart: '',
+    histEnd: '',
+    histUmkm: 'ALL',
+    histPage: 1,
+    histPageSize: 10,
+
+    actPage: 1,
+    actPageSize: 10,
+
+    adminKey: ''
+  };
+
+  // ===== helpers =====
+  function esc(s){
+    return String(s ?? '')
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;')
+      .replace(/\'/g,'&#39;');
+  }
+
+  function fmtRp(n){
+    const v = Number(n || 0);
+    return 'Rp ' + new Intl.NumberFormat('id-ID').format(isNaN(v)?0:v);
+  }
+  // kompatibilitas error lama
+  window.fmtRp = fmtRp;
+
+  function fmtDateID(ymd){
+    const s = String(ymd || '').trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return s;
+    return `${m[3]}/${m[2]}/${m[1]}`;
+  }
+
+  function fmtDT(iso){
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso || '');
+    return d.toLocaleString('id-ID', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+  }
+
+  function showToast(msg){
+    const t = $('toast');
+    if (!t) { alert(msg); return; }
+    t.textContent = String(msg || '');
+    t.classList.add('show');
+    setTimeout(()=>t.classList.remove('show'), 1600);
+  }
+  function toast(msg, ms = 1600){
+    // alias, biar tidak error
+    showToast(msg);
+  }
+  window.showToast = showToast;
+  window.toast = toast;
+
+  function showLoading(text){
+    const w = $('loadingWrap');
+    const tx = $('loadingText');
+    if (tx) tx.textContent = text || 'Memuat...';
+    if (w) w.classList.add('show');
+  }
+  function hideLoading(){
+    const w = $('loadingWrap');
+    if (w) w.classList.remove('show');
+  }
+
+  function openModal(title, bodyHtml){
+    const wrap = $('modalWrap');
+    const modal = $('modal');
+    if (!wrap || !modal) return;
+
+    modal.innerHTML = `
+      <div class="modalHead">
+        <div class="modalTitle">${esc(title || '')}</div>
+        <button class="iconBtn" id="btnCloseModal" aria-label="Close">✕</button>
+      </div>
+      <div class="modalBody">${bodyHtml || ''}</div>
+    `;
+    wrap.classList.add('show');
+
+    const btn = $('btnCloseModal');
+    if (btn) btn.onclick = closeModal;
+  }
+
+  function closeModal(){
+    const wrap = $('modalWrap');
+    const modal = $('modal');
+    if (modal) modal.innerHTML = '';
+    if (wrap) wrap.classList.remove('show');
+  }
+
+  function callApi(fnName, ...args){
+    return new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(err => reject(err))
+        [fnName](...args);
+    });
+  }
+
+  function setRoute(route){
+    state.route = route;
+    state.sidebarOpen = false;
+    renderApp();
+  }
+
+  function setSidebar(open){
+    state.sidebarOpen = !!open;
+    const sb = $('sidebar');
+    const ov = $('overlay');
+    if (sb) sb.classList.toggle('open', state.sidebarOpen);
+    if (ov) ov.classList.toggle('show', state.sidebarOpen);
+  }
+
+  // ===== render =====
+  function renderLogin(){
+    const app = $('app');
+    if (!app) return;
+
+    app.innerHTML = `
+      <div class="loginWrap">
+        <div class="loginCard">
+          <div class="loginTitle">Keuangan UMKM</div>
+          <div class="loginSub">Masuk untuk melanjutkan</div>
+
+          <div class="field">
+            <label>Email</label>
+            <input id="loginEmail" type="email" placeholder="contoh@email.com" autocomplete="username" />
+          </div>
+
+          <div class="field">
+            <label>Password</label>
+            <input id="loginPass" type="password" placeholder="••••••••" autocomplete="current-password" />
+          </div>
+
+          <div class="rowBtn">
+            <button id="btnLogin" class="btnPrimary full">Login</button>
+          </div>
+
+          <div id="loginErr" class="errText" style="display:none"></div>
+        </div>
+      </div>
+    `;
+
+    $('btnLogin').onclick = async () => {
+      const email = $('loginEmail').value.trim();
+      const pass = $('loginPass').value;
+
+      $('loginErr').style.display = 'none';
+      showLoading('Login...');
+
+      try {
+        const res = await callApi('api_login', email, pass);
+        hideLoading();
+
+        state.sessionId = res.sessionId;
+        state.user = { email: res.email, name: res.name };
+        localStorage.setItem('KU_SESSION', state.sessionId);
+
+        showToast('Login berhasil');
+        renderApp();
+      } catch (e) {
+        hideLoading();
+        const msg = (e && e.message) ? e.message : String(e);
+        const errEl = $('loginErr');
+        errEl.textContent = msg;
+        errEl.style.display = 'block';
+      }
+    };
+  }
+
+  function renderShell(){
+    const app = $('app');
+    if (!app) return;
+
+    const routeLabel = ({
+      dashboard: 'dashboard',
+      riwayat: 'riwayat',
+      akun: 'akun',
+      aktivitas: 'aktivitas'
+    })[state.route] || state.route;
+
+    app.innerHTML = `
+      <div class="appShell">
+        <div class="topbar">
+          <button class="iconBtn" id="btnMenu" aria-label="Menu">☰</button>
+          <div class="brand">Keuangan UMKM</div>
+          <span class="badge">${esc(routeLabel)}</span>
+          <div class="spacer"></div>
+          <button class="btn" id="btnLogout">Logout</button>
+        </div>
+
+        <div id="overlay" class="overlay"></div>
+
+        <div class="appBody">
+          <aside id="sidebar" class="sidebar">
+            <a class="menuItem ${state.route==='dashboard'?'active':''}" href="#" id="mDashboard">Dashboard</a>
+            <a class="menuItem ${state.route==='riwayat'?'active':''}" href="#" id="mRiwayat">Riwayat</a>
+            <a class="menuItem ${state.route==='akun'?'active':''}" href="#" id="mAkun">Manage Akun</a>
+            <a class="menuItem ${state.route==='aktivitas'?'active':''}" href="#" id="mAktivitas">Activity Log</a>
+
+            <div style="margin-top:14px" class="hint">
+              Login sebagai: <b>${esc(state.user?.email || '')}</b>
+            </div>
+          </aside>
+
+          <main class="main">
+            <div class="content" id="mainContent"></div>
+          </main>
+        </div>
+      </div>
+    `;
+
+    $('btnMenu').onclick = () => setSidebar(!state.sidebarOpen);
+    $('overlay').onclick = () => setSidebar(false);
+
+    $('btnLogout').onclick = () => {
+      localStorage.removeItem('KU_SESSION');
+      state.sessionId = null;
+      state.user = null;
+      renderApp();
+    };
+
+    $('mDashboard').onclick = (e)=>{ e.preventDefault(); setRoute('dashboard'); };
+    $('mRiwayat').onclick = (e)=>{ e.preventDefault(); setRoute('riwayat'); };
+    $('mAkun').onclick = (e)=>{ e.preventDefault(); setRoute('akun'); };
+    $('mAktivitas').onclick = (e)=>{ e.preventDefault(); setRoute('aktivitas'); };
+
+    setSidebar(state.sidebarOpen);
+  }
+
+  function renderDashboard(){
+    const main = $('mainContent');
+    if (!main) return;
+
+    main.innerHTML = `
+      <div class="card">
+        <div class="cardTitle">Dashboard</div>
+        <div class="cardSub">Ringkasan periode tertentu</div>
+
+        <div class="grid2">
+          <div class="field">
+            <label>Dari</label>
+            <input id="dashStart" type="date" value="${esc(state.dashStart)}" />
+          </div>
+          <div class="field">
+            <label>Sampai</label>
+            <input id="dashEnd" type="date" value="${esc(state.dashEnd)}" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label>UMKM</label>
+          <select id="dashUmkm">
+            <option value="ALL">Semua</option>
+            <option value="BENGKEL">Bengkel</option>
+            <option value="CUCIAN">Cucian</option>
+          </select>
+        </div>
+
+        <div class="rowBtn">
+          <button id="btnDashApply" class="btn full">Terapkan</button>
+          <button id="btnDashReset" class="btn full">Reset</button>
+        </div>
+
+        <div class="rowBtn">
+          <button id="btnPrintPdf" class="btnPrimary full">Print PDF</button>
+          <button id="btnExportXls" class="btnPrimary full">Export Excel</button>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <div class="miniLabel">Total Pemasukan</div>
+          <div class="bigNumber" id="dTotalIn">-</div>
+        </div>
+        <div class="card">
+          <div class="miniLabel">Total Pengeluaran</div>
+          <div class="bigNumber" id="dTotalOut">-</div>
+        </div>
+        <div class="card">
+          <div class="miniLabel">Laba</div>
+          <div class="bigNumber" id="dProfit">-</div>
+        </div>
+        <div class="card">
+          <div class="miniLabel">Rugi</div>
+          <div class="bigNumber" id="dLoss">-</div>
+        </div>
+        <div class="card">
+          <div class="miniLabel">Saldo Awal</div>
+          <div class="bigNumber" id="dSaldoAwal">-</div>
+        </div>
+        <div class="card">
+          <div class="miniLabel">Saldo Akhir</div>
+          <div class="bigNumber" id="dSaldoAkhir">-</div>
+        </div>
+        <div class="card">
+          <div class="miniLabel">Jumlah Transaksi</div>
+          <div class="bigNumber" id="dCount">-</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="cardTitle">Input Transaksi</div>
+        <div class="cardSub">Tambah pemasukan atau pengeluaran</div>
+
+        <div class="grid2">
+          <div class="field">
+            <label>Tanggal</label>
+            <input id="txTanggal" type="date" />
+          </div>
+          <div class="field">
+            <label>UMKM</label>
+            <select id="txUmkm">
+              <option value="BENGKEL">Bengkel</option>
+              <option value="CUCIAN">Cucian</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="field">
+            <label>Tipe</label>
+            <select id="txType">
+              <option value="PEMASUKAN">PEMASUKAN</option>
+              <option value="PENGELUARAN">PENGELUARAN</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Metode</label>
+            <select id="txMethod">
+              <option value="CASH">CASH</option>
+              <option value="TRANSFER">TRANSFER</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Nominal</label>
+          <input id="txNominal" type="text" inputmode="numeric" placeholder="contoh: 50000" />
+          <div class="hint">Boleh pakai titik/koma, sistem akan ambil angkanya saja.</div>
+        </div>
+
+        <div class="field">
+          <label>Keterangan</label>
+          <input id="txNote" type="text" placeholder="contoh: ganti oli" />
+        </div>
+
+        <div class="rowBtn">
+          <button id="btnAddTx" class="btnPrimary full">Simpan</button>
+        </div>
+      </div>
+    `;
+
+    $('dashUmkm').value = state.dashUmkm;
+
+    $('btnDashApply').onclick = async () => {
+      state.dashStart = $('dashStart').value || '';
+      state.dashEnd = $('dashEnd').value || '';
+      state.dashUmkm = $('dashUmkm').value || 'ALL';
+      await loadDashboard();
+    };
+
+    $('btnDashReset').onclick = async () => {
+      state.dashStart = '';
+      state.dashEnd = '';
+      state.dashUmkm = 'ALL';
+      renderApp();
+      await loadDashboard();
+    };
+
+    $('btnAddTx').onclick = async () => {
+      const payload = {
+        tanggal: $('txTanggal').value,
+        umkm: $('txUmkm').value,
+        type: $('txType').value,
+        method: $('txMethod').value,
+        nominal: $('txNominal').value,
+        keterangan: $('txNote').value
+      };
+
+      showLoading('Menyimpan transaksi...');
+      try {
+        await callApi('api_addTx', state.sessionId, payload);
+        hideLoading();
+        showToast('Transaksi tersimpan');
+
+        $('txTanggal').value = '';
+        $('txNominal').value = '';
+        $('txNote').value = '';
+
+        await loadDashboard();
+      } catch (e) {
+        hideLoading();
+        showToast((e && e.message) ? e.message : String(e));
+      }
+    };
+
+    $('btnPrintPdf').onclick = () => exportReport('PDF');
+    $('btnExportXls').onclick = () => exportReport('XLSX');
+
+    loadDashboard();
+  }
+
+  async function loadDashboard(){
+    showLoading('Memuat dashboard...');
+    try {
+      const res = await callApi('api_dashboard', state.sessionId, {
+        start: state.dashStart,
+        end: state.dashEnd,
+        umkm: state.dashUmkm
+      });
+      hideLoading();
+
+      $('dTotalIn').textContent = fmtRp(res.totalIn);
+      $('dTotalOut').textContent = fmtRp(res.totalOut);
+      $('dProfit').textContent = fmtRp(res.profit);
+      $('dLoss').textContent = fmtRp(res.loss);
+      $('dSaldoAwal').textContent = fmtRp(res.saldoAwal);
+      $('dSaldoAkhir').textContent = fmtRp(res.saldoAkhir);
+      $('dCount').textContent = String(res.count || 0);
+    } catch (e) {
+      hideLoading();
+      showToast((e && e.message) ? e.message : String(e));
+    }
+  }
+
+  async function exportReport(format){
+    const filters = { start: state.dashStart, end: state.dashEnd, umkm: state.dashUmkm, format };
+
+    // trik biar pop-up blocker nggak blok: buka tab dulu
+    const w = window.open('', '_blank');
+
+    showLoading(format === 'PDF' ? 'Membuat PDF...' : 'Membuat Excel...');
+    try {
+      const res = await callApi('api_exportReport', state.sessionId, filters);
+      hideLoading();
+
+      const url = res.downloadUrl || res.fileUrl || '';
+      if (!url) {
+        showToast('Link download tidak ada');
+        if (w) w.close();
+        return;
+      }
+
+      if (w) w.location.href = url;
+      else window.open(url, '_blank');
+
+      showToast('Laporan dibuat');
+    } catch (e) {
+      hideLoading();
+      if (w) w.close();
+      showToast((e && e.message) ? e.message : String(e));
+    }
+  }
+
+  function renderRiwayat(){
+    const main = $('mainContent');
+    if (!main) return;
+
+    main.innerHTML = `
+      <div class="card">
+        <div class="cardTitle">Filter Riwayat</div>
+        <div class="cardSub">Atur periode dan UMKM, lalu tekan Terapkan</div>
+
+        <div class="grid2">
+          <div class="field">
+            <label>Dari</label>
+            <input id="histStart" type="date" value="${esc(state.histStart)}" />
+          </div>
+          <div class="field">
+            <label>Sampai</label>
+            <input id="histEnd" type="date" value="${esc(state.histEnd)}" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label>UMKM</label>
+          <select id="histUmkm">
+            <option value="ALL">Semua</option>
+            <option value="BENGKEL">Bengkel</option>
+            <option value="CUCIAN">Cucian</option>
+          </select>
+        </div>
+
+        <div class="rowBtn">
+          <button id="btnHistApply" class="btn full">Terapkan</button>
+          <button id="btnHistReset" class="btn full">Reset</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="rowBetween">
+          <div>
+            <div class="cardTitle">Riwayat Transaksi</div>
+            <div class="cardSub" id="histInfo">-</div>
+          </div>
+        </div>
+
+        <div id="histList" class="empty">Memuat data...</div>
+
+        <div class="pager">
+          <button id="btnPrev" class="btn">Prev</button>
+          <button id="btnNext" class="btn">Next</button>
+          <div class="pagerInfo">Page: <span id="pno">1</span></div>
+        </div>
+      </div>
+    `;
+
+    $('histUmkm').value = state.histUmkm;
+
+    $('btnHistApply').onclick = () => {
+      state.histStart = $('histStart').value || '';
+      state.histEnd = $('histEnd').value || '';
+      state.histUmkm = $('histUmkm').value || 'ALL';
+      state.histPage = 1;
+      loadRiwayat();
+    };
+
+    $('btnHistReset').onclick = () => {
+      state.histStart = '';
+      state.histEnd = '';
+      state.histUmkm = 'ALL';
+      state.histPage = 1;
+      renderApp();
+    };
+
+    $('btnPrev').onclick = () => {
+      if (state.histPage <= 1) return;
+      state.histPage--;
+      loadRiwayat();
+    };
+    $('btnNext').onclick = () => {
+      state.histPage++;
+      loadRiwayat();
+    };
+
+    loadRiwayat();
+  }
+
+  function txCard(t){
+    const date = fmtDateID(t.date);
+    const umkm = String(t.umkm || '').toUpperCase();
+    const type = String(t.type || '').toUpperCase();
+    const method = String(t.method || '').toUpperCase();
+    const nominal = fmtRp(t.amount || 0);
+    const note = esc(t.note || '-');
+
+    return `
+      <div class="txCard">
+        <div class="txTitle">${esc(date)} • ${esc(umkm)} • ${esc(type)}</div>
+        <div class="txMeta">Metode: <b>${esc(method)}</b> • Nominal: <b>${esc(nominal)}</b></div>
+        <div class="note">${note}</div>
+        <div class="txBtns">
+          <button class="btn" data-act="detail" data-txid="${esc(t.txId)}">Detail</button>
+          <button class="btn" data-act="edit" data-txid="${esc(t.txId)}">Edit</button>
+          <button class="btnDanger" data-act="del" data-txid="${esc(t.txId)}">Hapus</button>
+        </div>
+      </div>
+    `;
+  }
+
+  async function loadRiwayat(){
+    const listEl = $('histList');
+    const infoEl = $('histInfo');
+    if (listEl) listEl.innerHTML = '<div class="empty">Memuat data...</div>';
+
+    try {
+      const res = await callApi('api_listTx', state.sessionId, {
+        start: state.histStart,
+        end: state.histEnd,
+        umkm: state.histUmkm,
+        page: state.histPage,
+        pageSize: state.histPageSize
+      });
+
+      const items = Array.isArray(res.items) ? res.items : [];
+      if (infoEl) infoEl.textContent = `Ditemukan: ${items.length} data (total: ${res.total || 0})`;
+
+      if (!items.length) {
+        listEl.innerHTML = '<div class="empty">Tidak ada transaksi</div>';
+      } else {
+        listEl.innerHTML = items.map(txCard).join('');
+      }
+
+      // pager
+      if ($('pno')) $('pno').textContent = String(res.page || state.histPage || 1);
+      if ($('btnPrev')) $('btnPrev').disabled = (res.page || state.histPage) <= 1;
+      if ($('btnNext')) $('btnNext').disabled = !res.hasMore;
+
+      // pasang handler tombol (penting: setelah list di-render)
+      listEl.querySelectorAll('[data-act="detail"]').forEach(btn => {
+        btn.onclick = () => openTxDetail(btn.dataset.txid);
+      });
+      listEl.querySelectorAll('[data-act="edit"]').forEach(btn => {
+        btn.onclick = () => openTxEdit(btn.dataset.txid);
+      });
+      listEl.querySelectorAll('[data-act="del"]').forEach(btn => {
+        btn.onclick = () => deleteTx(btn.dataset.txid);
+      });
+
+    } catch (e) {
+      const msg = (e && e.message) ? e.message : String(e);
+      listEl.innerHTML = `<div class="errText">API error: ${esc(msg)}</div>`;
+    }
+  }
+
+  async function openTxDetail(txId){
+    showLoading('Memuat detail...');
+    try {
+      const t = await callApi('api_getTx', state.sessionId, txId);
+      hideLoading();
+
+      openModal('Detail Transaksi', `
+        <div class="field"><label>ID</label><input value="${esc(t.txId)}" disabled /></div>
+        <div class="grid2">
+          <div class="field"><label>Tanggal</label><input value="${esc(fmtDateID(t.date))}" disabled /></div>
+          <div class="field"><label>UMKM</label><input value="${esc(t.umkm)}" disabled /></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Tipe</label><input value="${esc(t.type)}" disabled /></div>
+          <div class="field"><label>Metode</label><input value="${esc(t.method)}" disabled /></div>
+        </div>
+        <div class="field"><label>Nominal</label><input value="${esc(fmtRp(t.amount))}" disabled /></div>
+        <div class="field"><label>Keterangan</label><input value="${esc(t.note || '-')}" disabled /></div>
+        <div class="hint">Created: ${esc(fmtDT(t.createdAt))} • Updated: ${esc(fmtDT(t.updatedAt))}</div>
+      `);
+
+    } catch (e) {
+      hideLoading();
+      showToast((e && e.message) ? e.message : String(e));
+    }
+  }
+
+  async function openTxEdit(txId){
+    showLoading('Memuat data transaksi...');
+    try {
+      const t = await callApi('api_getTx', state.sessionId, txId);
+      hideLoading();
+
+      openModal('Edit Transaksi', `
+        <form id="formEditTx">
+          <input type="hidden" name="txId" value="${esc(t.txId)}" />
+
+          <div class="grid2">
+            <div class="field">
+              <label>Tanggal</label>
+              <input name="tanggal" type="date" value="${esc(t.date)}" />
+            </div>
+            <div class="field">
+              <label>UMKM</label>
+              <select name="umkm">
+                <option value="BENGKEL">Bengkel</option>
+                <option value="CUCIAN">Cucian</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="field">
+              <label>Tipe</label>
+              <select name="type">
+                <option value="PEMASUKAN">PEMASUKAN</option>
+                <option value="PENGELUARAN">PENGELUARAN</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Metode</label>
+              <select name="method">
+                <option value="CASH">CASH</option>
+                <option value="TRANSFER">TRANSFER</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Nominal</label>
+            <input name="nominal" type="text" inputmode="numeric" value="${esc(String(t.amount || 0))}" />
+          </div>
+
+          <div class="field">
+            <label>Keterangan</label>
+            <input name="keterangan" type="text" value="${esc(t.note || '')}" />
+          </div>
+
+          <div class="rowBtn">
+            <button type="submit" class="btnPrimary full">Simpan Perubahan</button>
+            <button type="button" id="btnCancelEdit" class="btn full">Batal</button>
+          </div>
+        </form>
+      `);
+
+      const form = $('formEditTx');
+      if (form) {
+        form.umkm.value = String(t.umkm || '').toUpperCase();
+        form.type.value = String(t.type || '').toUpperCase();
+        form.method.value = String(t.method || '').toUpperCase();
+
+        form.onsubmit = async (ev) => {
+          ev.preventDefault();
+          const fd = new FormData(form);
+          const payload = Object.fromEntries(fd.entries());
+
+          showLoading('Menyimpan perubahan...');
+          try {
+            await callApi('api_updateTx', state.sessionId, payload);
+            hideLoading();
+            closeModal();
+            showToast('Berhasil diubah');
+            await loadRiwayat();
+          } catch (e) {
+            hideLoading();
+            showToast((e && e.message) ? e.message : String(e));
+          }
+        };
+      }
+
+      const cancel = $('btnCancelEdit');
+      if (cancel) cancel.onclick = closeModal;
+
+    } catch (e) {
+      hideLoading();
+      showToast((e && e.message) ? e.message : String(e));
+    }
+  }
+
+  async function deleteTx(txId){
+    if (!confirm('Hapus transaksi ini?')) return;
+    showLoading('Menghapus transaksi...');
+    try {
+      await callApi('api_deleteTx', state.sessionId, txId);
+      hideLoading();
+      showToast('Terhapus');
+      await loadRiwayat();
+    } catch (e) {
+      hideLoading();
+      showToast((e && e.message) ? e.message : String(e));
+    }
+  }
+
+  // ===== Manage Akun =====
+  function renderAkun(){
+    const main = $('mainContent');
+    if (!main) return;
+
+    main.innerHTML = `
+      <div class="card">
+        <div class="cardTitle">Manage Akun</div>
+        <div class="cardSub">Masukkan Admin Key untuk mengelola user</div>
+
+        <div class="field">
+          <label>Admin Key</label>
+          <input id="adminKey" type="password" placeholder="••••••" />
+          <div class="hint">Admin Key tersimpan di SETTINGS (ADMIN_KEY)</div>
+        </div>
+
+        <div class="rowBtn">
+          <button id="btnSaveKey" class="btn full">Simpan Key</button>
+          <button id="btnLoadUsers" class="btnPrimary full">Tampilkan User</button>
+          <button id="btnAddUser" class="btn full">Tambah User</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="cardTitle">Daftar User</div>
+        <div class="cardSub" id="userInfo">-</div>
+        <div id="usersList" class="empty">Belum dimuat</div>
+      </div>
+    `;
+
+    const saved = localStorage.getItem('KU_ADMINKEY') || '';
+    state.adminKey = saved;
+    $('adminKey').value = saved;
+
+    $('btnSaveKey').onclick = () => {
+      state.adminKey = $('adminKey').value.trim();
+      localStorage.setItem('KU_ADMINKEY', state.adminKey);
+      showToast('Admin key disimpan');
+    };
+
+    $('btnLoadUsers').onclick = () => loadUsers();
+    $('btnAddUser').onclick = () => openUserForm('add');
+  }
+
+  async function loadUsers(){
+    const key = $('adminKey').value.trim();
+    state.adminKey = key;
+    localStorage.setItem('KU_ADMINKEY', key);
+
+    const listEl = $('usersList');
+    const infoEl = $('userInfo');
+
+    listEl.innerHTML = '<div class="empty">Memuat...</div>';
+
+    try {
+      const users = await callApi('api_usersList', state.sessionId, key);
+      infoEl.textContent = `Total: ${users.length}`;
+      listEl.innerHTML = users.map(u => userCard(u)).join('') || '<div class="empty">Tidak ada user</div>';
+
+      listEl.querySelectorAll('[data-uact="edit"]').forEach(btn => btn.onclick = () => {
+        const userId = btn.dataset.userid;
+        const u = users.find(x => String(x.userId) === String(userId));
+        openUserForm('edit', u);
+      });
+
+      listEl.querySelectorAll('[data-uact="del"]').forEach(btn => btn.onclick = () => {
+        const userId = btn.dataset.userid;
+        deleteUser(userId);
+      });
+
+    } catch (e) {
+      const msg = (e && e.message) ? e.message : String(e);
+      listEl.innerHTML = `<div class="errText">${esc(msg)}</div>`;
+    }
+  }
+
+  function userCard(u){
+    return `
+      <div class="userCard">
+        <div class="userTop">
+          <div>
+            <div class="userName">${esc(u.name || '-')}</div>
+            <div class="muted">${esc(u.email || '-')}</div>
+          </div>
+          <div class="userBadge">${u.isActive ? 'AKTIF' : 'NONAKTIF'}</div>
+        </div>
+
+        <div class="txBtns" style="margin-top:10px">
+          <button class="btn" data-uact="edit" data-userid="${esc(u.userId)}">Edit</button>
+          <button class="btnDanger" data-uact="del" data-userid="${esc(u.userId)}">Hapus</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function openUserForm(mode, u){
+    const isEdit = mode === 'edit';
+    openModal(isEdit ? 'Edit User' : 'Tambah User', `
+      <form id="formUser">
+        ${isEdit ? `<input type="hidden" name="userId" value="${esc(u.userId)}" />` : ''}
+
+        <div class="field">
+          <label>Email</label>
+          <input name="email" type="email" value="${esc(u?.email || '')}" ${isEdit ? 'disabled' : ''} />
+        </div>
+
+        <div class="field">
+          <label>Nama</label>
+          <input name="name" type="text" value="${esc(u?.name || '')}" />
+        </div>
+
+        <div class="field">
+          <label>Password ${isEdit ? '(kosongkan kalau tidak ganti)' : ''}</label>
+          <input name="password" type="text" value="" />
+        </div>
+
+        <div class="field">
+          <label>Status</label>
+          <select name="isActive">
+            <option value="true">Aktif</option>
+            <option value="false">Nonaktif</option>
+          </select>
+        </div>
+
+        <div class="rowBtn">
+          <button type="submit" class="btnPrimary full">${isEdit ? 'Simpan' : 'Tambah'}</button>
+          <button type="button" id="btnCancelUser" class="btn full">Batal</button>
+        </div>
+      </form>
+    `);
+
+    const form = $('formUser');
+    if (form) {
+      form.isActive.value = String(u?.isActive ?? true);
+      if (isEdit) {
+        // email disabled -> ambil dari u
+        form.onsubmit = (ev) => submitUser(ev, { userId: u.userId, email: u.email });
+      } else {
+        form.onsubmit = submitUser;
+      }
+    }
+    $('btnCancelUser').onclick = closeModal;
+  }
+
+  async function submitUser(ev, fixed){
+    ev.preventDefault();
+    const key = $('adminKey') ? $('adminKey').value.trim() : (state.adminKey || '');
+    const form = ev.target;
+    const fd = new FormData(form);
+    const payload = Object.fromEntries(fd.entries());
+
+    if (fixed && fixed.userId) payload.userId = fixed.userId;
+    if (fixed && fixed.email) payload.email = fixed.email;
+
+    payload.isActive = String(payload.isActive) === 'true';
+
+    showLoading('Menyimpan user...');
+    try {
+      await callApi('api_usersUpsert', state.sessionId, key, payload);
+      hideLoading();
+      closeModal();
+      showToast('Tersimpan');
+      await loadUsers();
+    } catch (e) {
+      hideLoading();
+      showToast((e && e.message) ? e.message : String(e));
+    }
+  }
+
+  async function deleteUser(userId){
+    if (!confirm('Hapus user ini?')) return;
+    const key = $('adminKey') ? $('adminKey').value.trim() : (state.adminKey || '');
+
+    showLoading('Menghapus user...');
+    try {
+      await callApi('api_usersDelete', state.sessionId, key, userId);
+      hideLoading();
+      showToast('User terhapus');
+      await loadUsers();
+    } catch (e) {
+      hideLoading();
+      showToast((e && e.message) ? e.message : String(e));
+    }
+  }
+
+  // ===== Activity =====
+  function renderAktivitas(){
+    const main = $('mainContent');
+    if (!main) return;
+
+    main.innerHTML = `
+      <div class="card">
+        <div class="cardTitle">Activity Log</div>
+        <div class="cardSub">Catatan aktivitas sistem</div>
+
+        <div id="logList" class="empty">Memuat data...</div>
+
+        <div class="pager">
+          <button id="btnActPrev" class="btn">Prev</button>
+          <button id="btnActNext" class="btn">Next</button>
+          <div class="pagerInfo">Page: <span id="actPno">1</span></div>
+        </div>
+      </div>
+    `;
+
+    $('btnActPrev').onclick = () => {
+      if (state.actPage <= 1) return;
+      state.actPage--;
+      loadActivity();
+    };
+    $('btnActNext').onclick = () => {
+      state.actPage++;
+      loadActivity();
+    };
+
+    loadActivity();
+  }
+
+  function prettyAction(a){
+    const s = String(a || '');
+    return s.replace(/^API_/, '').replace(/_(OK|ERR)$/, '').replace(/_/g, ' ');
+  }
+
+  function parseDetail(detail){
+    try {
+      const o = JSON.parse(detail || '{}');
+      return o && typeof o === 'object' ? o : {};
+    } catch(e){
+      return { raw: String(detail || '') };
+    }
+  }
+
+  function logCard(x){
+    const isErr = String(x.action || '').includes('_ERR');
+    const action = prettyAction(x.action);
+    const d = parseDetail(x.detail);
+    const jsonPretty = esc(JSON.stringify(d, null, 2));
+
+    return `
+      <div class="logCard ${isErr ? 'logErr' : ''}">
+        <div class="logTop">
+          <div class="logAction">${esc(action)}</div>
+          <div class="logTime">${esc(fmtDT(x.time))}</div>
+        </div>
+        <div class="logEmail">${esc(x.email || '-')}</div>
+        <div class="logDetail"><pre>${jsonPretty}</pre></div>
+      </div>
+    `;
+  }
+
+  async function loadActivity(){
+    const listEl = $('logList');
+    listEl.innerHTML = '<div class="empty">Memuat data...</div>';
+
+    try {
+      const res = await callApi('api_activityList', state.sessionId, state.actPage, state.actPageSize);
+      const items = Array.isArray(res.items) ? res.items : [];
+
+      listEl.innerHTML = items.map(logCard).join('') || '<div class="empty">Tidak ada log</div>';
+
+      $('actPno').textContent = String(res.page || state.actPage || 1);
+      $('btnActPrev').disabled = (res.page || state.actPage) <= 1;
+      $('btnActNext').disabled = !res.hasMore;
+    } catch (e) {
+      const msg = (e && e.message) ? e.message : String(e);
+      listEl.innerHTML = `<div class="errText">${esc(msg)}</div>`;
+    }
+  }
+
+  // ===== main render router =====
+  function renderApp(){
+    if (!state.sessionId) {
+      renderLogin();
+      return;
+    }
+
+    renderShell();
+
+    const main = $('mainContent');
+    if (!main) return;
+
+    if (state.route === 'dashboard') renderDashboard();
+    else if (state.route === 'riwayat') renderRiwayat();
+    else if (state.route === 'akun') renderAkun();
+    else if (state.route === 'aktivitas') renderAktivitas();
+    else renderDashboard();
+  }
+
+  // ===== init =====
+  async function bootstrap(){
+    const sid = localStorage.getItem('KU_SESSION');
+    const key = localStorage.getItem('KU_ADMINKEY') || '';
+
+    state.adminKey = key;
+
+    if (!sid) {
+      renderApp();
+      return;
+    }
+
+    showLoading('Memeriksa sesi...');
+    try {
+      const v = await callApi('api_validate', sid);
+      hideLoading();
+
+      if (v && v.valid) {
+        state.sessionId = sid;
+        state.user = v.session || { email: '', name: '' };
+        renderApp();
+      } else {
+        localStorage.removeItem('KU_SESSION');
+        state.sessionId = null;
+        state.user = null;
+        renderApp();
+      }
+    } catch (e) {
+      hideLoading();
+      localStorage.removeItem('KU_SESSION');
+      state.sessionId = null;
+      state.user = null;
+      renderApp();
+    }
+  }
+
+  // close modal when click backdrop
+  document.addEventListener('click', (e) => {
+    const wrap = $('modalWrap');
+    if (!wrap) return;
+    if (e.target === wrap) closeModal();
+  });
+
+  bootstrap();
+})();
+</script>

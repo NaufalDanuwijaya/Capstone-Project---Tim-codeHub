@@ -1,6 +1,4 @@
 const Utils = (() => {
-  function nowISO() { return new Date().toISOString(); }
-
   function toDate(value) {
     if (value === null || value === undefined) return null;
     if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
@@ -8,6 +6,7 @@ const Utils = (() => {
     const s = String(value).trim();
     if (!s) return null;
 
+    // dd/mm/yyyy atau dd-mm-yyyy
     const m2 = s.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
     if (m2) {
       const dd = Number(m2[1]);
@@ -17,6 +16,7 @@ const Utils = (() => {
       return isNaN(d.getTime()) ? null : d;
     }
 
+    // yyyy-mm-dd atau yyyy/mm/dd
     const m3 = s.match(/^(\d{4})[\/\-](\d{2})[\/\-](\d{2})$/);
     if (m3) {
       const yy = Number(m3[1]);
@@ -30,12 +30,17 @@ const Utils = (() => {
     return isNaN(d.getTime()) ? null : d;
   }
 
+  function dateOnly(d) {
+    if (!(d instanceof Date)) return null;
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+
   function formatYMD(d) {
-    const date = (d instanceof Date) ? d : toDate(d);
-    if (!date) return '';
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+    const dt = (d instanceof Date) ? d : toDate(d);
+    if (!dt) return '';
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const day = String(dt.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   }
 
@@ -68,16 +73,18 @@ const Utils = (() => {
   }
 
   function safeJson(obj) {
-    try { return JSON.stringify(obj || {}); } catch (e) { return '{}'; }
+    try { return JSON.stringify(obj || {}); }
+    catch (e) { return '{}'; }
   }
 
-  function clamp(n, min, max) {
+  function clampInt(n, def, min, max) {
     n = Number(n);
-    if (isNaN(n)) return min;
-    if (n < min) return min;
-    if (n > max) return max;
+    if (!isFinite(n)) n = def;
+    n = Math.floor(n);
+    if (n < min) n = min;
+    if (n > max) n = max;
     return n;
   }
 
-  return { nowISO, toDate, formatYMD, toNumber, normalizeEmail, sha256, uuid, safeJson, clamp };
+  return { toDate, dateOnly, formatYMD, toNumber, normalizeEmail, sha256, uuid, safeJson, clampInt };
 })();

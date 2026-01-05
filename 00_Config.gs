@@ -1,31 +1,26 @@
-const CONFIG = (() => {
-  const PROP_DB_ID = 'DB_ID';
+const CONFIG = {
+  APP_NAME: 'Keuangan UMKM',
 
-  const SHEETS = {
+  SHEETS: {
     USERS: 'USERS',
     TX: 'TRANSACTIONS',
     TX_BENGKEL: 'TX_BENGKEL',
     TX_CUCIAN: 'TX_CUCIAN',
     LOG: 'ACTIVITY_LOG',
     SETTINGS: 'SETTINGS',
-  };
+  },
 
-  const SET_ADMIN_KEY = 'ADMIN_KEY';
-  const REPORT_FOLDER_ID = 'REPORT_FOLDER_ID';
+  PAGE_SIZE: 10,
+  UMKM: ['BENGKEL', 'CUCIAN'],
+  PAYMENT: ['CASH', 'TRANSFER'],
+  TYPE: ['PEMASUKAN', 'PENGELUARAN'],
 
-  // Default folder laporan (sesuai link kamu)
-  const REPORT_FOLDER_ID_DEFAULT = '1QGB9-quFnMyijO576R56ar5pDr2waeRm';
-  const REPORT_FOLDER_NAME = 'Keuangan UMKM - Laporan';
+  // SETTINGS keys
+  ADMIN_KEY_HASH: 'ADMIN_KEY_HASH',
+  REPORT_FOLDER_ID: 'REPORT_FOLDER_ID',
 
-  const SESSION_TTL_SECONDS = 60 * 60 * 8; // 8 jam
+  REPORT_FOLDER_NAME: 'Keuangan UMKM - Laporan',
 
-  return {
-    PROP_DB_ID,
-    SHEETS,
-    SET_ADMIN_KEY,
-    REPORT_FOLDER_ID,
-    REPORT_FOLDER_ID_DEFAULT,
-    REPORT_FOLDER_NAME,
-    SESSION_TTL_SECONDS,
-  };
-})();
+  // session
+  SESSION_TTL_MINUTES: 60 * 12, // 12 jam
+};

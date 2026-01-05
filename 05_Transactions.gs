@@ -8,12 +8,17 @@ const Transactions = (() => {
   }
 
   function _rowToObj(r){
+    const umkm = String(r[2] || '').toUpperCase();
+    const type = String(r[3] || '').toUpperCase();
+    const method = String(r[4] || '').toUpperCase();
+    const dateObj = (r[1] instanceof Date) ? r[1] : Utils.toDate(r[1]);
+
     return {
       txId: String(r[0] || ''),
-      date: (r[1] instanceof Date) ? Utils.formatYMD(r[1]) : Utils.formatYMD(r[1]) || String(r[1] || ''),
-      umkm: String(r[2] || ''),
-      type: String(r[3] || ''),
-      method: String(r[4] || ''),
+      date: dateObj ? Utils.formatYMD(dateObj) : String(r[1] || ''),
+      umkm,
+      type,
+      method,
       amount: Number(r[5] || 0),
       note: String(r[6] || ''),
       createdAt: (r[7] instanceof Date) ? r[7].toISOString() : String(r[7] || ''),
@@ -30,7 +35,7 @@ const Transactions = (() => {
     const method = String(payload.method || '').toUpperCase();
     const tanggal = Utils.toDate(payload.tanggal);
     const nominal = Utils.toNumber(payload.nominal);
-    const note = String(payload.keterangan || '').trim();
+    const note = String(payload.keterangan || payload.note || '').trim();
 
     if (!tanggal) throw new Error('Tanggal wajib diisi');
     if (!(umkm === 'BENGKEL' || umkm === 'CUCIAN')) throw new Error('UMKM tidak valid');
@@ -41,14 +46,27 @@ const Transactions = (() => {
     const now = new Date();
     const txId = Utils.uuid('TX');
 
-    const row = [txId,tanggal,umkm,type,method,nominal,note,now,now,false];
+    const row = [
+      txId,
+      new Date(tanggal.getFullYear(), tanggal.getMonth(), tanggal.getDate()), // date-only
+      umkm,
+      type,
+      method,
+      nominal,
+      note,
+      now,
+      now,
+      false
+    ];
 
+    // 1) master
     DB.sh(CONFIG.SHEETS.TX).appendRow(row);
 
+    // 2) per UMKM
     const shName = _sheetByUmkm(umkm);
     DB.sh(shName).appendRow(row);
 
-    DB.log('TX_ADD', s.email, { txId, umkm, type, nominal });
+    DB.log('TX_ADD', s.email, { txId, umkm, type, nominal, method });
     return { ok: true, txId };
   }
 
@@ -56,7 +74,10 @@ const Transactions = (() => {
     const sh = DB.sh(sheetName);
     const last = sh.getLastRow();
     if (last < 2) return { rowIndex: -1 };
-    const values = sh.getRange(2, 1, last - 1, 10).getValues();
+
+    const range = sh.getRange(2, 1, last - 1, 10);
+    const values = range.getValues();
+
     for (let i = 0; i < values.length; i++){
       if (String(values[i][0]) === String(txId)) return { rowIndex: 2 + i };
     }
@@ -93,8 +114,8 @@ const Transactions = (() => {
     const type = String(payload.type || oldRow[3] || '').toUpperCase();
     const method = String(payload.method || oldRow[4] || '').toUpperCase();
     const tanggal = Utils.toDate(payload.tanggal) || oldRow[1];
-    const nominal = Utils.toNumber(payload.nominal ?? oldRow[5]);
-    const note = String(payload.keterangan ?? oldRow[6] ?? '').trim();
+    const nominal = Utils.toNumber(payload.nominal || oldRow[5]);
+    const note = String((payload.keterangan ?? payload.note) ?? oldRow[6] ?? '').trim();
 
     if (!tanggal) throw new Error('Tanggal wajib diisi');
     if (!(umkm === 'BENGKEL' || umkm === 'CUCIAN')) throw new Error('UMKM tidak valid');
@@ -103,24 +124,42 @@ const Transactions = (() => {
     if (!nominal || nominal <= 0) throw new Error('Nominal wajib diisi');
 
     const now = new Date();
-    const newRow = [txId,tanggal,umkm,type,method,nominal,note,oldRow[7],now,oldRow[9] === true];
 
+    const newRow = [
+      txId,
+      new Date(tanggal.getFullYear(), tanggal.getMonth(), tanggal.getDate()),
+      umkm,
+      type,
+      method,
+      nominal,
+      note,
+      oldRow[7], // createdAt tetap
+      now,
+      oldRow[9] === true
+    ];
+
+    // update master
     DB.sh(CONFIG.SHEETS.TX).getRange(master.rowIndex, 1, 1, 10).setValues([newRow]);
 
-    try {
-      const oldSheet = _sheetByUmkm(oldUmkm);
-      const fOld = _findRowByTxId_(oldSheet, txId);
-      if (fOld.rowIndex > 0) DB.sh(oldSheet).getRange(fOld.rowIndex, 1, 1, 10).setValues([newRow]);
-    } catch(e){}
+    // update sheet lama
+    const oldSheet = _sheetByUmkm(oldUmkm);
+    const fOld = _findRowByTxId_(oldSheet, txId);
+    if (fOld.rowIndex > 0){
+      DB.sh(oldSheet).getRange(fOld.rowIndex, 1, 1, 10).setValues([newRow]);
+    }
 
+    // kalau pindah UMKM, pastikan ada di sheet tujuan
     if (umkm !== oldUmkm){
       const newSheet = _sheetByUmkm(umkm);
       const fNew = _findRowByTxId_(newSheet, txId);
-      if (fNew.rowIndex > 0) DB.sh(newSheet).getRange(fNew.rowIndex, 1, 1, 10).setValues([newRow]);
-      else DB.sh(newSheet).appendRow(newRow);
+      if (fNew.rowIndex > 0){
+        DB.sh(newSheet).getRange(fNew.rowIndex, 1, 1, 10).setValues([newRow]);
+      } else {
+        DB.sh(newSheet).appendRow(newRow);
+      }
     }
 
-    DB.log('TX_EDIT', s.email, { txId, umkm, type, nominal });
+    DB.log('TX_EDIT', s.email, { txId, umkm, type, nominal, method });
     return { ok: true };
   }
 
@@ -137,6 +176,7 @@ const Transactions = (() => {
     row[8] = new Date();
     DB.sh(CONFIG.SHEETS.TX).getRange(master.rowIndex, 1, 1, 10).setValues([row]);
 
+    // mark di dua sheet juga (kalau ada)
     [CONFIG.SHEETS.TX_BENGKEL, CONFIG.SHEETS.TX_CUCIAN].forEach(shName=>{
       const f = _findRowByTxId_(shName, txId);
       if (f.rowIndex > 0){
@@ -167,7 +207,9 @@ const Transactions = (() => {
 
     const values = sh.getRange(2, 1, last - 1, 10).getValues();
 
-    let items = values.map(_rowToObj).filter(x => !x.isDeleted);
+    let items = values
+      .map(_rowToObj)
+      .filter(x => !x.isDeleted);
 
     if (umkm !== 'ALL') items = items.filter(x => String(x.umkm).toUpperCase() === umkm);
     if (start) items = items.filter(x => x.date >= start);
@@ -203,36 +245,50 @@ const Transactions = (() => {
     if (start) inRange = inRange.filter(x => x.date >= start);
     if (end) inRange = inRange.filter(x => x.date <= end);
 
-    const totalIn = inRange.filter(x=>String(x.type).toUpperCase()==='PEMASUKAN').reduce((a,t)=>a+Number(t.amount||0),0);
-    const totalOut = inRange.filter(x=>String(x.type).toUpperCase()==='PENGELUARAN').reduce((a,t)=>a+Number(t.amount||0),0);
+    const totalIn = inRange
+      .filter(x=>String(x.type).toUpperCase()==='PEMASUKAN')
+      .reduce((a,t)=>a+Number(t.amount||0),0);
+
+    const totalOut = inRange
+      .filter(x=>String(x.type).toUpperCase()==='PENGELUARAN')
+      .reduce((a,t)=>a+Number(t.amount||0),0);
 
     const profit = Math.max(0, totalIn - totalOut);
     const loss = Math.max(0, totalOut - totalIn);
     const saldoAkhir = saldoAwal + (totalIn - totalOut);
 
-    return { totalIn, totalOut, profit, loss, saldoAwal, saldoAkhir, count: inRange.length };
+    return {
+      totalIn, totalOut, profit, loss,
+      saldoAwal, saldoAkhir,
+      count: inRange.length
+    };
   }
 
-  function rowReport(sessionId, filters){
+  // ====== INI YANG DIBUTUHKAN 06_report.gs ======
+  // 06_report.gs memanggil Transactions.reportRows(...)
+  function reportRows(sessionId, filters){
     Auth.requireSession(sessionId);
 
     const umkm  = String(filters?.umkm || 'ALL').toUpperCase();
     const start = String(filters?.start || '').trim();
     const end   = String(filters?.end || '').trim();
 
+    // ambil semua transaksi untuk hitung saldo awal + saldo berjalan
     const all = listPaged(sessionId, { umkm, start:'', end:'', page:1, pageSize:999999 }).items.slice();
-    all.sort((a,b)=> (a.date > b.date ? 1 : (a.date < b.date ? -1 : 0)));
+    all.sort((a,b)=> (a.date > b.date ? 1 : (a.date < b.date ? -1 : 0))); // ASC
 
     let saldo = 0;
-    if (start) {
-      for (const t of all) {
+
+    // saldo awal = transaksi sebelum start
+    if (start){
+      for (const t of all){
         if (t.date >= start) break;
-        const type = String(t.type || '').toUpperCase();
-        const amt = Number(t.amount || 0);
-        saldo += (type === 'PEMASUKAN') ? amt : -amt;
+        const sign = (String(t.type).toUpperCase() === 'PEMASUKAN') ? 1 : -1;
+        saldo += sign * Number(t.amount || 0);
       }
     }
 
+    // filter periode
     let rows = all;
     if (start) rows = rows.filter(x => x.date >= start);
     if (end)   rows = rows.filter(x => x.date <= end);
@@ -240,22 +296,48 @@ const Transactions = (() => {
     const out = [];
     let no = 0;
 
-    for (const t of rows) {
+    for (const t of rows){
       const type = String(t.type || '').toUpperCase();
-      const masuk = (type === 'PEMASUKAN') ? Number(t.amount || 0) : 0;
-      const keluar = (type === 'PENGELUARAN') ? Number(t.amount || 0) : 0;
+      const pemasukan = (type === 'PEMASUKAN') ? Number(t.amount || 0) : 0;
+      const pengeluaran = (type === 'PENGELUARAN') ? Number(t.amount || 0) : 0;
 
-      saldo = saldo + masuk - keluar;
+      saldo = saldo + pemasukan - pengeluaran;
       no++;
 
-      out.push({ no, tanggal: t.date, keterangan: String(t.note || ''), metode: String(t.method || ''), pemasukan: masuk, pengeluaran: keluar, saldo });
+      // biar kalau ALL tetap kebaca transaksi UMKM mana
+      const ketBase = String(t.note || '').trim() || '-';
+      const keterangan = (umkm === 'ALL') ? `${t.umkm} - ${ketBase}` : ketBase;
+
+      out.push({
+        no,
+        tanggal: t.date,
+        keterangan,
+        metode: t.method || '-',
+        pemasukan,
+        pengeluaran,
+        saldo
+      });
     }
 
-    return { ok: true, period: { umkm, start, end }, rows: out };
+    return out;
   }
 
-  function rowreport(sessionId, filters){ return rowReport(sessionId, filters); }
-  function reportRows(sessionId, filters){ return (rowReport(sessionId, filters).rows || []); }
+  // alias opsional (kalau ada sisa pemanggilan lama)
+  function rowReport(sessionId, filters){
+    const rows = reportRows(sessionId, filters);
+    return { ok: true, rows };
+  }
+  function rowreport(sessionId, filters){
+    return rowReport(sessionId, filters);
+  }
 
-  return { add, get, update, remove, listPaged, dashboard, rowReport, rowreport, reportRows };
+  return {
+    add, get, update, remove,
+    listPaged, dashboard,
+
+    // untuk laporan
+    reportRows,
+    rowReport,
+    rowreport
+  };
 })();

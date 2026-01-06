@@ -30,7 +30,8 @@ const Transactions = (() => {
   function add(sessionId, payload){
     const s = Auth.requireSession(sessionId);
 
-    const umkm = String(payload.umkm || '').toUpperCase();
+    // Tambahkan .trim() agar input lebih bersih
+    const umkm = String(payload.umkm || '').trim().toUpperCase();
     const type = String(payload.type || '').toUpperCase();
     const method = String(payload.method || '').toUpperCase();
     const tanggal = Utils.toDate(payload.tanggal);
@@ -43,9 +44,19 @@ const Transactions = (() => {
     if (!(method === 'CASH' || method === 'TRANSFER')) throw new Error('Metode pembayaran tidak valid');
     if (!nominal || nominal <= 0) throw new Error('Nominal wajib diisi');
 
+    // --- PERBAIKAN BUG DI SINI ---
+    // 1. Tentukan nama sheet tujuan
+    const shName = _sheetByUmkm(umkm);
+    
+    // 2. Cek apakah sheet tersebut benar-benar ada SEBELUM menulis ke Master.
+    // Jika sheet TX_BENGKEL/CUCIAN hilang, kode ini akan error di sini (melalui DB.sh),
+    // sehingga data BELUM masuk ke TRANSACTIONS (mencegah data tidak sinkron).
+    DB.sh(shName); 
+    // -----------------------------
+
     const now = new Date();
     const txId = Utils.uuid('TX');
-
+    
     const row = [
       txId,
       new Date(tanggal.getFullYear(), tanggal.getMonth(), tanggal.getDate()), // date-only
@@ -59,11 +70,11 @@ const Transactions = (() => {
       false
     ];
 
-    // 1) master
+    // 3. Tulis ke Master (TRANSACTIONS)
     DB.sh(CONFIG.SHEETS.TX).appendRow(row);
 
-    // 2) per UMKM
-    const shName = _sheetByUmkm(umkm);
+    // 4. Tulis ke Sheet UMKM
+    // (Aman dilakukan karena keberadaan sheet sudah divalidasi di langkah no 2)
     DB.sh(shName).appendRow(row);
 
     DB.log('TX_ADD', s.email, { txId, umkm, type, nominal, method });

@@ -37,18 +37,16 @@ const Reports = (() => {
 
     const sh = ss.getSheets()[0];
     sh.setName('LAPORAN');
-
     buildTemplate_(sh, { umkmText, periodText, dash, rows });
     SpreadsheetApp.flush();
 
     const gid = sh.getSheetId();
     const blob = exportBlob_(ssId, gid, format);
-
     const outName = `${baseName}.${format === 'PDF' ? 'pdf' : 'xlsx'}`;
     const outMime = (format === 'PDF')
       ? MimeType.PDF
       : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-
+    
     const outFile = folder.createFile(blob.setName(outName).setContentType(outMime));
 
     // hapus spreadsheet sementara
@@ -74,7 +72,6 @@ const Reports = (() => {
 
   function buildTemplate_(sh, ctx) {
     const { umkmText, periodText, dash, rows } = ctx;
-
     sh.clear({ contentsOnly: true });
 
     // width
@@ -93,7 +90,7 @@ const Reports = (() => {
       .setFontWeight('bold')
       .setFontSize(14)
       .setHorizontalAlignment('center');
-
+    
     // Period
     sh.getRange('A2:G2').merge();
     sh.getRange('A2')
@@ -101,27 +98,33 @@ const Reports = (() => {
       .setFontSize(11)
       .setHorizontalAlignment('center');
 
-    // Summary (kanan)
-    sh.getRange('A4:D8').merge();
-    sh.getRange('E4:G8').setValues([
-      ['Saldo Awal', '', dash.saldoAwal || 0],
+    // --- BAGIAN SUMMARY DI EDIT ---
+    // Mengurangi range karena Saldo Awal dihapus.
+    // Dulu A4:D8 (5 baris), sekarang A4:D7 (4 baris).
+    
+    sh.getRange('A4:D7').merge();
+    
+    // Tulis data ringkasan (tanpa saldo awal)
+    sh.getRange('E4:G7').setValues([
       ['Total Pemasukan', '', dash.totalIn || 0],
       ['Total Pengeluaran', '', dash.totalOut || 0],
       ['Saldo Akhir', '', dash.saldoAkhir || 0],
       ['Jumlah Transaksi', '', dash.count || 0],
     ]);
-    sh.getRange('E4:E8').setFontWeight('bold');
-    sh.getRange('G4:G8').setNumberFormat('#,##0');
+    
+    sh.getRange('E4:E7').setFontWeight('bold');
+    sh.getRange('G4:G7').setNumberFormat('#,##0');
+    // ------------------------------
 
-    // Header row
-    const headerRow = 10;
+    // Header row (turun sedikit biar rapi)
+    const headerRow = 9; // majukan sedikit karena summary lebih pendek
     sh.getRange(headerRow, 1, 1, 7).setValues([[
       'NO','TANGGAL','KETERANGAN','METODE PEMBAYARAN','PEMASUKAN','PENGELUARAN','SALDO'
     ]])
       .setFontWeight('bold')
       .setHorizontalAlignment('center')
       .setBackground('#e8f1ff');
-
+    
     sh.setFrozenRows(headerRow);
 
     const startRow = headerRow + 1;
@@ -159,13 +162,13 @@ const Reports = (() => {
       .setFontWeight('bold')
       .setHorizontalAlignment('right')
       .setBackground('#f6faff');
-
+    
     sh.getRange(totalRow, 5, 1, 3).setValues([[
       dash.totalIn || 0,
       dash.totalOut || 0,
       dash.saldoAkhir || 0
     ]]).setFontWeight('bold').setNumberFormat('#,##0').setBackground('#f6faff');
-
+    
     sh.getRange(totalRow, 1, 1, 7).setBorder(true, true, true, true, true, true);
   }
 
@@ -198,7 +201,7 @@ const Reports = (() => {
       headers: { Authorization: `Bearer ${token}` },
       muteHttpExceptions: true
     });
-
+    
     const code = resp.getResponseCode();
     if (code !== 200) throw new Error(`Gagal export (${format}). HTTP ${code}. ${resp.getContentText().slice(0, 200)}`);
     return resp.getBlob();
@@ -206,9 +209,9 @@ const Reports = (() => {
 
   function getReportFolder_() {
     // prioritas: SETTINGS -> folder id
-    const key = CONFIG.REPORT_FOLDER_SETTING; // pastikan config kamu ada ini
+    const key = CONFIG.REPORT_FOLDER_SETTING;
+    // pastikan config kamu ada ini
     const fromSetting = DB.getSetting(key);
-
     if (fromSetting) {
       try { return DriveApp.getFolderById(fromSetting); } catch (e) {}
     }

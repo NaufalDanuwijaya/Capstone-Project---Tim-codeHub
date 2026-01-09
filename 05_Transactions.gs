@@ -23,14 +23,14 @@ const Transactions = (() => {
       note: String(r[6] || ''),
       createdAt: (r[7] instanceof Date) ? r[7].toISOString() : String(r[7] || ''),
       updatedAt: (r[8] instanceof Date) ? r[8].toISOString() : String(r[8] || ''),
-      isDeleted: r[9] === true
+      isDeleted: r[9] === true,
+      user: String(r[10] || '')
     };
   }
 
   function add(sessionId, payload){
     const s = Auth.requireSession(sessionId);
 
-    // Tambahkan .trim() agar input lebih bersih
     const umkm = String(payload.umkm || '').trim().toUpperCase();
     const type = String(payload.type || '').toUpperCase();
     const method = String(payload.method || '').toUpperCase();
@@ -44,22 +44,15 @@ const Transactions = (() => {
     if (!(method === 'CASH' || method === 'TRANSFER')) throw new Error('Metode pembayaran tidak valid');
     if (!nominal || nominal <= 0) throw new Error('Nominal wajib diisi');
 
-    // --- PERBAIKAN BUG DI SINI ---
-    // 1. Tentukan nama sheet tujuan
     const shName = _sheetByUmkm(umkm);
-    
-    // 2. Cek apakah sheet tersebut benar-benar ada SEBELUM menulis ke Master.
-    // Jika sheet TX_BENGKEL/CUCIAN hilang, kode ini akan error di sini (melalui DB.sh),
-    // sehingga data BELUM masuk ke TRANSACTIONS (mencegah data tidak sinkron).
     DB.sh(shName); 
-    // -----------------------------
 
     const now = new Date();
     const txId = Utils.uuid('TX');
     
     const row = [
       txId,
-      new Date(tanggal.getFullYear(), tanggal.getMonth(), tanggal.getDate()), // date-only
+      new Date(tanggal.getFullYear(), tanggal.getMonth(), tanggal.getDate()),
       umkm,
       type,
       method,
@@ -67,14 +60,11 @@ const Transactions = (() => {
       note,
       now,
       now,
-      false
+      false,
+      s.email
     ];
 
-    // 3. Tulis ke Master (TRANSACTIONS)
     DB.sh(CONFIG.SHEETS.TX).appendRow(row);
-
-    // 4. Tulis ke Sheet UMKM
-    // (Aman dilakukan karena keberadaan sheet sudah divalidasi di langkah no 2)
     DB.sh(shName).appendRow(row);
 
     DB.log('TX_ADD', s.email, { txId, umkm, type, nominal, method });
@@ -86,7 +76,7 @@ const Transactions = (() => {
     const last = sh.getLastRow();
     if (last < 2) return { rowIndex: -1 };
 
-    const range = sh.getRange(2, 1, last - 1, 10);
+    const range = sh.getRange(2, 1, last - 1, 11);
     const values = range.getValues();
 
     for (let i = 0; i < values.length; i++){
@@ -103,7 +93,7 @@ const Transactions = (() => {
     const found = _findRowByTxId_(CONFIG.SHEETS.TX, txId);
     if (found.rowIndex < 0) throw new Error('Data tidak ditemukan');
 
-    const r = DB.sh(CONFIG.SHEETS.TX).getRange(found.rowIndex, 1, 1, 10).getValues()[0];
+    const r = DB.sh(CONFIG.SHEETS.TX).getRange(found.rowIndex, 1, 1, 11).getValues()[0];
     const obj = _rowToObj(r);
     if (obj.isDeleted) throw new Error('Data tidak ditemukan');
     return obj;
@@ -111,14 +101,13 @@ const Transactions = (() => {
 
   function update(sessionId, payload){
     const s = Auth.requireSession(sessionId);
-
     const txId = String(payload.txId || '').trim();
     if (!txId) throw new Error('txId wajib');
 
     const master = _findRowByTxId_(CONFIG.SHEETS.TX, txId);
     if (master.rowIndex < 0) throw new Error('Data tidak ditemukan');
 
-    const oldRow = DB.sh(CONFIG.SHEETS.TX).getRange(master.rowIndex, 1, 1, 10).getValues()[0];
+    const oldRow = DB.sh(CONFIG.SHEETS.TX).getRange(master.rowIndex, 1, 1, 11).getValues()[0];
     const oldUmkm = String(oldRow[2] || '').toUpperCase();
 
     const umkm = String(payload.umkm || oldUmkm).toUpperCase();
@@ -135,7 +124,6 @@ const Transactions = (() => {
     if (!nominal || nominal <= 0) throw new Error('Nominal wajib diisi');
 
     const now = new Date();
-
     const newRow = [
       txId,
       new Date(tanggal.getFullYear(), tanggal.getMonth(), tanggal.getDate()),
@@ -144,27 +132,25 @@ const Transactions = (() => {
       method,
       nominal,
       note,
-      oldRow[7], // createdAt tetap
+      oldRow[7],
       now,
-      oldRow[9] === true
+      oldRow[9] === true,
+      oldRow[10]
     ];
 
-    // update master
-    DB.sh(CONFIG.SHEETS.TX).getRange(master.rowIndex, 1, 1, 10).setValues([newRow]);
+    DB.sh(CONFIG.SHEETS.TX).getRange(master.rowIndex, 1, 1, 11).setValues([newRow]);
 
-    // update sheet lama
     const oldSheet = _sheetByUmkm(oldUmkm);
     const fOld = _findRowByTxId_(oldSheet, txId);
     if (fOld.rowIndex > 0){
-      DB.sh(oldSheet).getRange(fOld.rowIndex, 1, 1, 10).setValues([newRow]);
+      DB.sh(oldSheet).getRange(fOld.rowIndex, 1, 1, 11).setValues([newRow]);
     }
 
-    // kalau pindah UMKM, pastikan ada di sheet tujuan
     if (umkm !== oldUmkm){
       const newSheet = _sheetByUmkm(umkm);
       const fNew = _findRowByTxId_(newSheet, txId);
       if (fNew.rowIndex > 0){
-        DB.sh(newSheet).getRange(fNew.rowIndex, 1, 1, 10).setValues([newRow]);
+        DB.sh(newSheet).getRange(fNew.rowIndex, 1, 1, 11).setValues([newRow]);
       } else {
         DB.sh(newSheet).appendRow(newRow);
       }
@@ -182,19 +168,18 @@ const Transactions = (() => {
     const master = _findRowByTxId_(CONFIG.SHEETS.TX, txId);
     if (master.rowIndex < 0) throw new Error('Data tidak ditemukan');
 
-    const row = DB.sh(CONFIG.SHEETS.TX).getRange(master.rowIndex, 1, 1, 10).getValues()[0];
+    const row = DB.sh(CONFIG.SHEETS.TX).getRange(master.rowIndex, 1, 1, 11).getValues()[0];
     row[9] = true;
     row[8] = new Date();
-    DB.sh(CONFIG.SHEETS.TX).getRange(master.rowIndex, 1, 1, 10).setValues([row]);
+    DB.sh(CONFIG.SHEETS.TX).getRange(master.rowIndex, 1, 1, 11).setValues([row]);
 
-    // mark di dua sheet juga (kalau ada)
     [CONFIG.SHEETS.TX_BENGKEL, CONFIG.SHEETS.TX_CUCIAN].forEach(shName=>{
       const f = _findRowByTxId_(shName, txId);
       if (f.rowIndex > 0){
-        const r2 = DB.sh(shName).getRange(f.rowIndex, 1, 1, 10).getValues()[0];
+        const r2 = DB.sh(shName).getRange(f.rowIndex, 1, 1, 11).getValues()[0];
         r2[9] = true;
         r2[8] = new Date();
-        DB.sh(shName).getRange(f.rowIndex, 1, 1, 10).setValues([r2]);
+        DB.sh(shName).getRange(f.rowIndex, 1, 1, 11).setValues([r2]);
       }
     });
 
@@ -204,19 +189,17 @@ const Transactions = (() => {
 
   function listPaged(sessionId, filters){
     Auth.requireSession(sessionId);
-
     const start = Utils.formatYMD(filters?.start || '');
     const end = Utils.formatYMD(filters?.end || '');
     const umkm = String(filters?.umkm || 'ALL').toUpperCase();
-
     const page = Math.max(1, Number(filters?.page || 1));
     const pageSize = Math.max(1, Number(filters?.pageSize || 10));
 
     const sh = DB.sh(CONFIG.SHEETS.TX);
     const last = sh.getLastRow();
     if (last < 2) return { items: [], page, pageSize, total: 0, hasMore: false };
-
-    const values = sh.getRange(2, 1, last - 1, 10).getValues();
+    
+    const values = sh.getRange(2, 1, last - 1, 11).getValues();
 
     let items = values
       .map(_rowToObj)
@@ -235,62 +218,101 @@ const Transactions = (() => {
     return { items: paged, page, pageSize, total, hasMore: offset + pageSize < total };
   }
 
+  // --- DASHBOARD UPDATED (Grafik Laba Bulanan) ---
   function dashboard(sessionId, filters){
     Auth.requireSession(sessionId);
+    
     const start = Utils.formatYMD(filters?.start || '');
     const end = Utils.formatYMD(filters?.end || '');
     const umkm = String(filters?.umkm || 'ALL').toUpperCase();
 
-    const all = listPaged(sessionId, { start:'', end:'', umkm, page:1, pageSize:999999 }).items;
+    const result = listPaged(sessionId, { 
+      start: start, 
+      end: end, 
+      umkm: umkm, 
+      page: 1, 
+      pageSize: 999999 
+    });
+    
+    const items = result.items;
+    let totalIn = 0;
+    let totalOut = 0;
+    
+    const dailyMap = {};
+    const monthlyMap = {}; // Untuk Grafik Laba Bulanan
 
-    let saldoAwal = 0;
-    if (start){
-      const before = all.filter(x => x.date < start);
-      saldoAwal = before.reduce((acc, t)=>{
-        const sign = (String(t.type).toUpperCase() === 'PEMASUKAN') ? 1 : -1;
-        return acc + sign * Number(t.amount || 0);
-      }, 0);
+    for (const t of items) {
+      const type = String(t.type).toUpperCase();
+      const amount = Number(t.amount || 0);
+      const tDate = t.date; // YYYY-MM-DD
+      const monthKey = tDate.substring(0, 7); // YYYY-MM
+
+      if (type === 'PEMASUKAN') {
+        totalIn += amount;
+      } else if (type === 'PENGELUARAN') {
+        totalOut += amount;
+      }
+
+      // Grafik Harian (Trend)
+      if (!dailyMap[tDate]) dailyMap[tDate] = { date: tDate, income: 0, expense: 0 };
+      if (type === 'PEMASUKAN') dailyMap[tDate].income += amount;
+      if (type === 'PENGELUARAN') dailyMap[tDate].expense += amount;
+
+      // Grafik Bulanan (Profit Growth)
+      if (!monthlyMap[monthKey]) monthlyMap[monthKey] = 0;
+      if (type === 'PEMASUKAN') monthlyMap[monthKey] += amount;
+      if (type === 'PENGELUARAN') monthlyMap[monthKey] -= amount;
     }
 
-    let inRange = all;
-    if (start) inRange = inRange.filter(x => x.date >= start);
-    if (end) inRange = inRange.filter(x => x.date <= end);
-
-    const totalIn = inRange
-      .filter(x=>String(x.type).toUpperCase()==='PEMASUKAN')
-      .reduce((a,t)=>a+Number(t.amount||0),0);
-
-    const totalOut = inRange
-      .filter(x=>String(x.type).toUpperCase()==='PENGELUARAN')
-      .reduce((a,t)=>a+Number(t.amount||0),0);
+    // Date Filling untuk Grafik Harian
+    if (start && end) {
+      let curr = new Date(start);
+      const last = new Date(end);
+      while (curr <= last) {
+        const ymd = Utils.formatYMD(curr);
+        if (!dailyMap[ymd]) {
+          dailyMap[ymd] = { date: ymd, income: 0, expense: 0 };
+        }
+        curr.setDate(curr.getDate() + 1);
+      }
+    }
 
     const profit = Math.max(0, totalIn - totalOut);
     const loss = Math.max(0, totalOut - totalIn);
-    const saldoAkhir = saldoAwal + (totalIn - totalOut);
+    const saldoAkhir = totalIn - totalOut;
+
+    // Format Data Grafik Harian
+    const chartTrend = Object.values(dailyMap).sort((a,b) => (a.date > b.date ? 1 : -1));
+
+    // Format Data Grafik Laba Bulanan
+    const chartProfitGrowth = Object.entries(monthlyMap)
+      .map(([key, val]) => ({ label: key, value: val }))
+      .sort((a,b) => a.label.localeCompare(b.label)); // Sort by Month (YYYY-MM)
 
     return {
-      totalIn, totalOut, profit, loss,
-      saldoAwal, saldoAkhir,
-      count: inRange.length
+      totalIn,
+      totalOut,
+      profit,
+      loss,
+      saldoAkhir,
+      count: items.length,
+      charts: {
+        trend: chartTrend,
+        profitGrowth: chartProfitGrowth // Data baru untuk grafik pertumbuhan
+      }
     };
   }
 
-  // ====== INI YANG DIBUTUHKAN 06_report.gs ======
-  // 06_report.gs memanggil Transactions.reportRows(...)
   function reportRows(sessionId, filters){
     Auth.requireSession(sessionId);
-
     const umkm  = String(filters?.umkm || 'ALL').toUpperCase();
     const start = String(filters?.start || '').trim();
     const end   = String(filters?.end || '').trim();
 
-    // ambil semua transaksi untuk hitung saldo awal + saldo berjalan
     const all = listPaged(sessionId, { umkm, start:'', end:'', page:1, pageSize:999999 }).items.slice();
-    all.sort((a,b)=> (a.date > b.date ? 1 : (a.date < b.date ? -1 : 0))); // ASC
+    all.sort((a,b)=> (a.date > b.date ? 1 : (a.date < b.date ? -1 : 0))); 
 
     let saldo = 0;
-
-    // saldo awal = transaksi sebelum start
     if (start){
       for (const t of all){
         if (t.date >= start) break;
@@ -299,7 +321,6 @@ const Transactions = (() => {
       }
     }
 
-    // filter periode
     let rows = all;
     if (start) rows = rows.filter(x => x.date >= start);
     if (end)   rows = rows.filter(x => x.date <= end);
@@ -315,7 +336,6 @@ const Transactions = (() => {
       saldo = saldo + pemasukan - pengeluaran;
       no++;
 
-      // biar kalau ALL tetap kebaca transaksi UMKM mana
       const ketBase = String(t.note || '').trim() || '-';
       const keterangan = (umkm === 'ALL') ? `${t.umkm} - ${ketBase}` : ketBase;
 
@@ -333,7 +353,6 @@ const Transactions = (() => {
     return out;
   }
 
-  // alias opsional (kalau ada sisa pemanggilan lama)
   function rowReport(sessionId, filters){
     const rows = reportRows(sessionId, filters);
     return { ok: true, rows };
@@ -345,8 +364,6 @@ const Transactions = (() => {
   return {
     add, get, update, remove,
     listPaged, dashboard,
-
-    // untuk laporan
     reportRows,
     rowReport,
     rowreport
